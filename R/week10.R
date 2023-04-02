@@ -138,8 +138,20 @@ hocv_cor_xgb <- cor(
 )^2
 hocv_cor_xgb
 
+# Publication
+# Construct table1_tbl
+table1_tbl <- data.frame(
+  algo = c("OLS Regression", "Elastic net", "Random forest", "eXtreme Gradient Boosting"),
+  cv_rsq = format(c(cv_rsq_ols, cv_rsq_glmnet, cv_rsq_rf, cv_rsq_xgb), nsmall = 2),
+  ho_rsq = format(c(hocv_cor_ols, hocv_cor_glmnet, hocv_cor_rf, hocv_cor_xgb), nsmall = 2)
+)
+table1_tbl
 
+#How did your results change between models? Why do you think this happened, specifically?
 
+#  How did you results change between k-fold CV and holdout CV? Why do you think this happened, specifically?
+
+#  Among the four models, which would you choose for a real-life prediction problem, and why? Are there tradeoffs? Write up to a paragraph.
 
 
 
