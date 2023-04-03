@@ -8,6 +8,8 @@ library(caret)
 gss_tbl <- read_sav(file = "../data/GSS2016.sav") %>% 
   # Remove labels 
   zap_labels() %>% 
+  # Recode IAP, Don't know and No answer to NA
+  mutate(across(where(is.character), ~na_if(., c("DK", "IAP")))) %>% 
   # Remove anyone who has a missing value for the workhours (HRS1) variable
   filter(!is.na(HRS1)) %>% 
   # Rename hrs1 to workhours %>% 
@@ -24,11 +26,14 @@ ggplot(gss_tbl, aes(x = workhours)) +
 # Analysis
 # Create a training and testing set using a 75/25 split
 set.seed(107)
-# Create partition index with caret
-index <- createDataPartition(gss_tbl$workhours, p = .75, list = FALSE)
 # Create train and test set
-train <- gss_tbl[index,]
-test <- gss_tbl[-index,]
+train_cases <- sample(1:nrow(gss_tbl), 1235)
+
+train <- gss_tbl[train_cases,]
+test <- gss_tbl[-train_cases,]
+
+# Create train folds
+training_folds <- createFolds(train$workhours, 10)
 
 # OLS
 # Train an OLS model with grid search predicting workhours from all remaining variables
@@ -40,18 +45,16 @@ model_ols <- train(
   # Median imputation to impute any remaining missing values
   preProcess= c("center", "scale", "zv", "medianImpute"),
   # 10-fold cross-validation
-  trControl = trainControl(method = "cv", number = 10))
+  trControl = trainControl(method = "cv",indexOut=training_folds, number = 10))
 
 # R^2 for 10-fold CV 
 cv_rsq_ols <- model_ols$results$Rsquared[1]
 cv_rsq_ols
 
-# Impute test set with median
-test <- predict(preProcess(test, method = "medianImpute"), newdata = test)
-
+# Predict test data using trained model
 # R^2 for CV
 hocv_cor_ols <- cor(
-  predict(model_ols, test),
+  predict(model_ols, test, na.action = na.pass),
   test$workhours
 )^2
 hocv_cor_ols
@@ -66,7 +69,7 @@ model_glmnet <- train(
   # Median imputation to impute any remaining missing values
   preProcess= c("center", "scale", "zv", "medianImpute"),
   # 10-fold cross-validation
-  trControl = trainControl(method = "cv", number = 10),
+  trControl = trainControl(method = "cv", indexOut=training_folds, number = 10),
   tuneGrid = expand.grid(alpha = seq(0, 1, 0.1), lambda = seq(0, 1, 0.1))
 )
 
@@ -76,7 +79,7 @@ cv_rsq_glmnet
 
 # R^2 for CV
 hocv_cor_glmnet <- cor(
-  predict(model_glmnet, test),
+  predict(model_glmnet, test, na.action = na.pass),
   test$workhours
 )^2
 hocv_cor_glmnet
@@ -87,12 +90,12 @@ model_rf <- train(
   workhours ~ ., 
   data = train, 
   na.action = na.pass,
-  method = "rf",
+  method = "ranger",
   # Median imputation to impute any remaining missing values
   preProcess= c("center", "scale", "zv", "medianImpute"),
   # 10-fold cross-validation
-  trControl = trainControl(method = "cv", number = 10),
-  tuneGrid = expand.grid(mtry=c(1, 3, 5))
+  trControl = trainControl(method = "cv", indexOut=training_folds, number = 10),
+  tuneLength = 10
 )
 
 # R^2 for 10-fold CV 
@@ -101,7 +104,7 @@ cv_rsq_rf
 
 # R^2 for CV
 hocv_cor_rf <- cor(
-  predict(model_rf, test),
+  predict(model_rf, test, na.action = na.pass),
   test$workhours
 )^2
 hocv_cor_rf
@@ -116,7 +119,7 @@ model_xgb <- train(
   # Median imputation to impute any remaining missing values
   preProcess= c("center", "scale", "zv", "medianImpute"),
   # 10-fold cross-validation
-  trControl = trainControl(method = "cv", number = 10),
+  trControl = trainControl(method = "cv", indexOut=training_folds, number = 10),
   tuneGrid = expand.grid(nrounds = c(10, 100, 500), 
                          max_depth = c(2,6,8),
                          eta = c(0.01, 0.1, 0.3),
@@ -133,7 +136,7 @@ cv_rsq_xgb
 
 # R^2 for CV
 hocv_cor_xgb <- cor(
-  predict(model_xgb, test),
+  predict(model_xgb, test, na.action = na.pass),
   test$workhours
 )^2
 hocv_cor_xgb
@@ -147,12 +150,11 @@ table1_tbl <- data.frame(
 )
 table1_tbl
 
-#How did your results change between models? Why do you think this happened, specifically?
+# XGBoost model has the highest k-fold CV R squared and random forest model has the highest holdout CV R squared. This might be due the complicated nature of these models (able to model non-linear relationship), and therefore they are able to explain more variance in the data compared to more simple model like OLS regression and elastic net. However, models such as XGB and random forest are more complicated, and may require more tuning for hyperparmeters. For OLS regression and Elastic net, there is large difference between k-fold CV R squared and holdout CV R squared. 
 
-#  How did you results change between k-fold CV and holdout CV? Why do you think this happened, specifically?
+# All models seem to suffer from a certain degress of overfitting because R squared values for k-fold CV are higher than holdout CV. However, OLS regression has the largest difference in R squared between k-fold CV and holdout CV R squared which suggested severe overfitting. For other models, the difference is less serious. This can be explained when we look at the k/N ratio. We can see that there are not enough data to train and test the model compared to the number of the parameters. For elastic net and XGB, the R squared for k-fold CV and holdout CV are more similar.
 
-#  Among the four models, which would you choose for a real-life prediction problem, and why? Are there tradeoffs? Write up to a paragraph.
-
+# Given the complex nature of the data (more than 600 predictors in comparison to the number of observations), intepretability is probably not the number one concern. Therefore, I'd like to choose a model that can maximize predictability. Among the four models, I would choose random forest because its holdout CV index is the highest among all the models and its k-fold CV R squared is second to highest. In addition, compared to XGBoost, random forest is less computationally intensive and might more applicable in applied situations. Also, compared to the other three models, OLS regression model suffers much more from rank-deficiency (predictors are perfectly correlated) which also contributes to overfitting. 
 
 
 
